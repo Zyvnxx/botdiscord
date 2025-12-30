@@ -266,7 +266,7 @@ async def on_ready():
     print(f'✅ {bot.user} telah online!')
     print(f'✅ Prefix: {PREFIX}')
     print(f'✅ Sistem Ekonomi: Ready!')
-    await bot.change_presence(activity=discord.Game(name=f"{PREFIX}help | Economy & Games"))
+    await bot.change_presence(activity=discord.Game(name=f"{PREFIX}help | Shop & Games"))
     check_daily_reset.start()
 
 @bot.event
@@ -819,29 +819,7 @@ async def bot_help(ctx):
         color=discord.Color.blue()
     )
     
-    embed.add_field(
-        name="𖥔˚ **SISTEM EKONOMI**",
-        value=f"""
-        `{PREFIX}balance` - Cek saldo & level
-        `{PREFIX}daily` - Klaim reward harian
-        `{PREFIX}work` - Bekerja (cooldown 1 jam)
-        `{PREFIX}crime` - Kejahatan (risiko tinggi)
-        `{PREFIX}transfer @user [amount]` - Transfer uang
-        `{PREFIX}rich` - Leaderboard orang terkaya
-        """,
-        inline=False
-    )
-    
-    embed.add_field(
-        name="𖥔˚ **SISTEM GACHA**",
-        value=f"""
-        `{PREFIX}gacha [normal/premium]` - Buka gacha
-        `{PREFIX}gachainfo` - Info drop rates gacha
-        `{PREFIX}inventory` - Lihat inventory
-        `{PREFIX}sell [item] [quantity]` - Jual item
-        """,
-        inline=False
-    )
+
     
     embed.add_field(
         name="𖥔˚ **PRICELIST**",
@@ -876,6 +854,31 @@ async def bot_help(ctx):
         inline=False
     )
     
+    embed.add_field(
+        name="𖥔˚ **SISTEM EKONOMI**",
+        value=f"""
+        `{PREFIX}balance` - Cek saldo & level
+        `{PREFIX}daily` - Klaim reward harian
+        `{PREFIX}work` - Bekerja (cooldown 1 jam)
+        `{PREFIX}crime` - Kejahatan (risiko tinggi)
+        `{PREFIX}transfer @user [amount]` - Transfer uang
+        `{PREFIX}rich` - Leaderboard orang terkaya
+        """,
+        inline=False
+    )
+    
+    embed.add_field(
+        name="𖥔˚ **SISTEM GACHA**",
+        value=f"""
+        `{PREFIX}gacha [normal/premium]` - Buka gacha
+        `{PREFIX}gachainfo` - Info drop rates gacha
+        `{PREFIX}inventory` - Lihat inventory
+        `{PREFIX}sell [item] [quantity]` - Jual item
+        """,
+        inline=False
+
+    )
+
     embed.add_field(
         name="𖥔˚ **UTILITAS**",
         value=f"""
@@ -1064,3 +1067,4 @@ if __name__ == "__main__":
     print(f"📝 Prefix: {PREFIX}")
     print("⏳ Connecting to Discord...")
     bot.run(TOKEN)
+
