@@ -58,6 +58,8 @@ class EconomySystem:
         self.data = {}
         self.gacha_data = {}
         self.inventory_data = {}
+        self._save_timer = None
+        self._pending_save = False
         self.load_data()
     
     def load_data(self):
@@ -80,8 +82,20 @@ class EconomySystem:
         except FileNotFoundError:
             self.inventory_data = {}
     
-    def save_data(self):
-        """Simpan semua data ke file"""
+    def schedule_save(self):
+        """Jadwalkan save data (debounced)"""
+        if not self._pending_save:
+            self._pending_save = True
+            asyncio.create_task(self._delayed_save())
+    
+    async def _delayed_save(self):
+        """Delay save untuk mengurangi I/O"""
+        await asyncio.sleep(10)  # Tunggu 10 detik sebelum save
+        self._pending_save = False
+        self._force_save()
+    
+    def _force_save(self):
+        """Save data langsung (digunakan saat bot shutdown)"""
         with open(ECONOMY_FILE, 'w') as f:
             json.dump(self.data, f, indent=4)
         
@@ -104,7 +118,8 @@ class EconomySystem:
                 "daily_streak": 0,
                 "last_daily": None,
                 "achievements": [],
-                "transactions": []
+                "transactions": [],
+                "last_collect": None
             }
         return self.data[str(user_id)]
     
@@ -133,8 +148,8 @@ class EconomySystem:
         }
         user_data["transactions"].append(transaction)
         
-        # Simpan
-        self.save_data()
+        # Jadwalkan save
+        self.schedule_save()
         return user_data["balance"]
     
     def remove_money(self, user_id, amount, reason="Tidak diketahui"):
@@ -155,7 +170,7 @@ class EconomySystem:
         }
         user_data["transactions"].append(transaction)
         
-        self.save_data()
+        self.schedule_save()
         return True
     
     def transfer_money(self, from_id, to_id, amount):
@@ -186,7 +201,7 @@ class EconomySystem:
         }
         to_user["transactions"].append(transaction_in)
         
-        self.save_data()
+        self.schedule_save()
         return True, "Transfer berhasil"
     
     def add_xp(self, user_id, xp_amount):
@@ -209,7 +224,7 @@ class EconomySystem:
             user_data["balance"] += bonus
             user_data["total_earned"] += bonus
         
-        self.save_data()
+        self.schedule_save()
         return level_ups
     
     def add_to_inventory(self, user_id, item_name, quantity=1):
@@ -221,7 +236,7 @@ class EconomySystem:
         else:
             inventory["items"][item_name] = quantity
         
-        self.save_data()
+        self.schedule_save()
     
     def add_gacha_item(self, user_id, item_data):
         """Tambahkan item gacha ke inventory"""
@@ -232,7 +247,7 @@ class EconomySystem:
             "value": item_data["value"],
             "timestamp": datetime.now().isoformat()
         })
-        self.save_data()
+        self.schedule_save()
     
     def get_gacha_pool(self, gacha_type="normal"):
         """Dapatkan pool gacha berdasarkan tipe"""
@@ -266,26 +281,13 @@ async def on_ready():
     print(f'✅ {bot.user} telah online!')
     print(f'✅ Prefix: {PREFIX}')
     print(f'✅ Sistem Ekonomi: Ready!')
+    print(f'✅ Optimasi: XP otomatis DIHAPUS, cooldown ditambahkan')
     await bot.change_presence(activity=discord.Game(name=f"{PREFIX}help | Shop & Games"))
     check_daily_reset.start()
 
 @bot.event
 async def on_message(message):
-    # Beri XP untuk setiap pesan (kecuali command)
-    if not message.author.bot and not message.content.startswith(PREFIX):
-        xp_gained = random.randint(1, 3)
-        level_ups = economy.add_xp(message.author.id, xp_gained)
-        
-        if level_ups > 0:
-            channel = message.channel
-            embed = discord.Embed(
-                title="🎉 LEVEL UP!",
-                description=f"{message.author.mention} telah mencapai **Level {economy.get_user_data(message.author.id)['level']}**!",
-                color=discord.Color.gold()
-            )
-            embed.add_field(name="Bonus", value=f"💎 +{level_ups * 100} koin", inline=True)
-            await channel.send(embed=embed)
-    
+    # TIDAK ADA XP OTOMATIS LAGI untuk menghindari rate limit
     await bot.process_commands(message)
 
 # ========== TASK: RESET DAILY ==========
@@ -299,7 +301,109 @@ async def check_daily_reset():
             last_daily = datetime.fromisoformat(user_data["last_daily"])
             if (current_time - last_daily).days > 2:
                 user_data["daily_streak"] = 0
-    economy.save_data()
+    economy._force_save()
+
+# ========== SISTEM XP MANUAL (AMAN DARI RATE LIMIT) ==========
+@bot.command(name='claimxp')
+@commands.cooldown(1, 300, commands.BucketType.user)  # 1x per 5 menit
+async def claim_xp(ctx):
+    """Klaim XP secara manual (cooldown 5 menit)"""
+    user_id = ctx.author.id
+    xp_gained = random.randint(5, 15)  # Lebih banyak dari sistem lama
+    level_ups = economy.add_xp(user_id, xp_gained)
+    
+    user_data = economy.get_user_data(user_id)
+    
+    embed = discord.Embed(
+        title="🎮 **XP DICLAIM!**",
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(name="⚡ XP Didapat", value=f"**+{xp_gained}** XP", inline=True)
+    embed.add_field(name="📊 XP Total", value=f"**{user_data['xp']}**/{user_data['level'] * 100}", inline=True)
+    
+    if level_ups > 0:
+        embed.title = "🎉 **LEVEL UP!**"
+        embed.color = discord.Color.gold()
+        embed.add_field(
+            name="✨ Level Baru",
+            value=f"**Level {user_data['level']}**! (+{level_ups * 100} koin bonus)",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='collect')
+@commands.cooldown(1, 600, commands.BucketType.user)  # 1x per 10 menit
+async def collect_rewards(ctx):
+    """Kumpulkan reward berkala (cooldown 10 menit)"""
+    user_id = ctx.author.id
+    user_data = economy.get_user_data(user_id)
+    
+    # Cek cooldown internal
+    current_time = datetime.now()
+    if user_data["last_collect"]:
+        last_collect = datetime.fromisoformat(user_data["last_collect"])
+        if (current_time - last_collect).seconds < 600:
+            time_left = 600 - (current_time - last_collect).seconds
+            minutes = time_left // 60
+            seconds = time_left % 60
+            await ctx.send(f"⏰ **Cooldown!** Tunggu **{minutes} menit {seconds} detik** lagi.")
+            return
+    
+    # Berikan reward acak
+    rewards = [
+        {"type": "xp", "min": 10, "max": 30, "emoji": "⚡"},
+        {"type": "money", "min": 50, "max": 200, "emoji": "💵"},
+        {"type": "both", "xp_min": 5, "xp_max": 15, "money_min": 25, "money_max": 100, "emoji": "🎁"}
+    ]
+    
+    reward = random.choice(rewards)
+    message = ""
+    level_ups = 0
+    
+    if reward["type"] == "xp":
+        xp = random.randint(reward["min"], reward["max"])
+        level_ups = economy.add_xp(user_id, xp)
+        message = f"{reward['emoji']} **+{xp} XP**"
+    
+    elif reward["type"] == "money":
+        money = random.randint(reward["min"], reward["max"])
+        economy.add_money(user_id, money, "Collect Reward")
+        message = f"{reward['emoji']} **+{money} koin**"
+    
+    else:  # both
+        xp = random.randint(reward["xp_min"], reward["xp_max"])
+        money = random.randint(reward["money_min"], reward["money_max"])
+        level_ups = economy.add_xp(user_id, xp)
+        economy.add_money(user_id, money, "Collect Reward")
+        message = f"{reward['emoji']} **+{xp} XP** dan **+{money} koin**"
+    
+    # Update last collect time
+    user_data["last_collect"] = current_time.isoformat()
+    economy.schedule_save()
+    
+    # Create embed
+    embed = discord.Embed(
+        title="🎁 **REWARD DICLAIM!**",
+        description=f"{ctx.author.mention} mendapatkan reward!",
+        color=discord.Color.green()
+    )
+    
+    embed.add_field(name="📦 Hadiah", value=message, inline=False)
+    
+    if level_ups > 0:
+        user_data = economy.get_user_data(user_id)  # Refresh data
+        embed.add_field(
+            name="✨ LEVEL UP!",
+            value=f"**Level {user_data['level']}** tercapai! (+{level_ups * 100} koin bonus)",
+            inline=False
+        )
+        embed.color = discord.Color.gold()
+    
+    embed.add_field(name="⏰ Cooldown", value="10 menit", inline=True)
+    
+    await ctx.send(embed=embed)
 
 # ========== SISTEM EKONOMI: BASIC COMMANDS ==========
 @bot.command(name='balance', aliases=['bal', 'uang', 'saldo'])
@@ -326,6 +430,7 @@ async def check_balance(ctx, member: discord.Member = None):
     await ctx.send(embed=embed)
 
 @bot.command(name='daily')
+@commands.cooldown(1, 86400, commands.BucketType.user)  # 1x per 24 jam
 async def daily_reward(ctx):
     """Klaim reward harian"""
     user_id = ctx.author.id
@@ -383,26 +488,10 @@ async def daily_reward(ctx):
     await ctx.send(embed=embed)
 
 @bot.command(name='work', aliases=['kerja'])
+@commands.cooldown(1, 3600, commands.BucketType.user)  # 1x per jam
 async def work_command(ctx):
     """Bekerja untuk mendapatkan uang (cooldown 1 jam)"""
     user_id = ctx.author.id
-    current_time = datetime.now()
-    
-    # Check cooldown
-    if user_id in work_cooldowns:
-        last_work = work_cooldowns[user_id]
-        if (current_time - last_work).seconds < 3600:  # 1 hour cooldown
-            time_left = 3600 - (current_time - last_work).seconds
-            minutes = time_left // 60
-            seconds = time_left % 60
-            
-            embed = discord.Embed(
-                title="⏰ **COOLDOWN WORK**",
-                description=f"Anda sudah bekerja baru-baru ini!\nTunggu **{minutes} menit {seconds} detik** lagi.",
-                color=discord.Color.red()
-            )
-            await ctx.send(embed=embed)
-            return
     
     # Get random job and salary
     jobs = [
@@ -417,8 +506,7 @@ async def work_command(ctx):
     job = random.choice(jobs)
     earnings = random.randint(job["min"], job["max"])
     
-    # Update cooldown and give money
-    work_cooldowns[user_id] = current_time
+    # Give money
     new_balance = economy.add_money(user_id, earnings, f"Work: {job['name']}")
     
     embed = discord.Embed(
@@ -434,26 +522,10 @@ async def work_command(ctx):
     await ctx.send(embed=embed)
 
 @bot.command(name='crime', aliases=['kejahatan'])
+@commands.cooldown(1, 7200, commands.BucketType.user)  # 1x per 2 jam
 async def crime_command(ctx):
     """Melakukan kejahatan untuk dapat uang cepat (risiko tinggi)"""
     user_id = ctx.author.id
-    current_time = datetime.now()
-    
-    # Check cooldown
-    if user_id in crime_cooldowns:
-        last_crime = crime_cooldowns[user_id]
-        if (current_time - last_crime).seconds < 7200:  # 2 hour cooldown
-            time_left = 7200 - (current_time - last_crime).seconds
-            minutes = time_left // 60
-            seconds = time_left % 60
-            
-            embed = discord.Embed(
-                title="⏰ **COOLDOWN CRIME**",
-                description=f"Anda sudah melakukan kejahatan baru-baru ini!\nTunggu **{minutes} menit {seconds} detik** lagi.",
-                color=discord.Color.red()
-            )
-            await ctx.send(embed=embed)
-            return
     
     # Crime outcomes
     outcomes = [
@@ -466,9 +538,6 @@ async def crime_command(ctx):
     
     crime = random.choice(outcomes)
     success = random.random() < crime["success_rate"]
-    
-    # Update cooldown
-    crime_cooldowns[user_id] = current_time
     
     if success:
         new_balance = economy.add_money(user_id, crime["success_pay"], f"Crime Success: {crime['name']}")
@@ -502,6 +571,7 @@ async def crime_command(ctx):
 
 # ========== SISTEM TRANSFER ==========
 @bot.command(name='transfer', aliases=['tf', 'kirim'])
+@commands.cooldown(3, 60, commands.BucketType.user)  # 3x per menit
 async def transfer_money(ctx, member: discord.Member, amount: int):
     """Transfer uang ke member lain"""
     if amount <= 0:
@@ -538,6 +608,7 @@ async def transfer_money(ctx, member: discord.Member, amount: int):
     await ctx.send(embed=embed)
 
 @bot.command(name='rich', aliases=['top', 'leaderboard'])
+@commands.cooldown(1, 30, commands.BucketType.channel)  # 1x per 30 detik per channel
 async def rich_leaderboard(ctx):
     """Lihat leaderboard orang terkaya"""
     # Get top 10 users
@@ -578,6 +649,7 @@ async def rich_leaderboard(ctx):
 
 # ========== SISTEM GACHA ==========
 @bot.command(name='gacha', aliases=['gatcha'])
+@commands.cooldown(1, 10, commands.BucketType.user)  # 1x per 10 detik
 async def gacha_command(ctx, gacha_type: str = "normal"):
     """Buka gacha untuk mendapatkan item langka"""
     user_id = ctx.author.id
@@ -663,14 +735,21 @@ async def gacha_command(ctx, gacha_type: str = "normal"):
     embed.add_field(name="💰 Nilai Item", value=f"**+{item_value}** koin", inline=True)
     embed.add_field(name="💸 Biaya Gacha", value=f"**-{cost}** koin", inline=True)
     
+    # Calculate profit/loss
+    profit = item_value - cost
+    if profit > 0:
+        embed.add_field(name="📈 Profit", value=f"**+{profit}** koin", inline=True)
+    else:
+        embed.add_field(name="📉 Loss", value=f"**{profit}** koin", inline=True)
+    
     # Add special message for divine items
     if selected_item["rarity"] == "divine":
-        embed.set_image(url="https://i.imgur.com/8c6J9.gif")  # Example sparkle gif
         embed.add_field(name="🎇 **LEGENDARY PULL!**", value="Anda mendapatkan item DIVINE! 🎉", inline=False)
     
     await ctx.send(embed=embed)
 
 @bot.command(name='gachainfo')
+@commands.cooldown(1, 60, commands.BucketType.channel)  # 1x per menit per channel
 async def gacha_info(ctx):
     """Lihat informasi tentang sistem gacha"""
     embed = discord.Embed(
@@ -719,6 +798,7 @@ async def gacha_info(ctx):
 
 # ========== INVENTORY SYSTEM ==========
 @bot.command(name='inventory', aliases=['inv', 'items'])
+@commands.cooldown(1, 10, commands.BucketType.user)  # 1x per 10 detik
 async def show_inventory(ctx, member: discord.Member = None):
     """Lihat inventory user"""
     target = member or ctx.author
@@ -766,6 +846,7 @@ async def show_inventory(ctx, member: discord.Member = None):
     await ctx.send(embed=embed)
 
 @bot.command(name='sell')
+@commands.cooldown(1, 5, commands.BucketType.user)  # 1x per 5 detik
 async def sell_item(ctx, item_name: str, quantity: int = 1):
     """Jual item dari inventory"""
     user_id = ctx.author.id
@@ -807,19 +888,18 @@ async def sell_item(ctx, item_name: str, quantity: int = 1):
     embed.add_field(name="💵 Harga Jual", value=f"**{sell_price}** koin", inline=True)
     embed.add_field(name="💎 Saldo Baru", value=f"**{new_balance}** koin", inline=True)
     
-    economy.save_data()
+    economy.schedule_save()
     await ctx.send(embed=embed)
 
 # ========== PERBAIKAN HELP COMMAND (DENGAN EKONOMI) ==========
 @bot.command(name='help')
+@commands.cooldown(1, 10, commands.BucketType.user)  # 1x per 10 detik
 async def bot_help(ctx):
     embed = discord.Embed(
         title="𖥔˚ BANTUAN BOT SHOP & GAMES",
         description=f"Prefix: `{PREFIX}`",
         color=discord.Color.blue()
     )
-    
-
     
     embed.add_field(
         name="𖥔˚ **PRICELIST**",
@@ -858,11 +938,13 @@ async def bot_help(ctx):
         name="𖥔˚ **SISTEM EKONOMI**",
         value=f"""
         `{PREFIX}balance` - Cek saldo & level
-        `{PREFIX}daily` - Klaim reward harian
+        `{PREFIX}daily` - Klaim reward harian (24 jam)
         `{PREFIX}work` - Bekerja (cooldown 1 jam)
-        `{PREFIX}crime` - Kejahatan (risiko tinggi)
+        `{PREFIX}crime` - Kejahatan (cooldown 2 jam)
         `{PREFIX}transfer @user [amount]` - Transfer uang
         `{PREFIX}rich` - Leaderboard orang terkaya
+        `{PREFIX}claimxp` - Klaim XP (cooldown 5 menit)
+        `{PREFIX}collect` - Kumpulkan reward (cooldown 10 menit)
         """,
         inline=False
     )
@@ -876,7 +958,6 @@ async def bot_help(ctx):
         `{PREFIX}sell [item] [quantity]` - Jual item
         """,
         inline=False
-
     )
 
     embed.add_field(
@@ -889,11 +970,14 @@ async def bot_help(ctx):
         inline=False
     )
     
+    embed.set_footer(text="✅ Sistem dioptimasi untuk menghindari rate limit Discord")
+    
     await ctx.send(embed=embed)
 
 # ========== ADMIN COMMANDS ==========
 @bot.command(name='addmoney')
 @commands.has_permissions(administrator=True)
+@commands.cooldown(1, 10, commands.BucketType.user)
 async def admin_add_money(ctx, member: discord.Member, amount: int):
     """Admin: Tambahkan uang ke user (admin only)"""
     new_balance = economy.add_money(member.id, amount, f"Admin Add by {ctx.author.name}")
@@ -910,6 +994,7 @@ async def admin_add_money(ctx, member: discord.Member, amount: int):
 
 @bot.command(name='reseteco')
 @commands.has_permissions(administrator=True)
+@commands.cooldown(1, 30, commands.BucketType.user)
 async def reset_economy(ctx, member: discord.Member):
     """Admin: Reset ekonomi user (admin only)"""
     user_id_str = str(member.id)
@@ -926,9 +1011,10 @@ async def reset_economy(ctx, member: discord.Member):
             "daily_streak": 0,
             "last_daily": None,
             "achievements": [],
-            "transactions": []
+            "transactions": [],
+            "last_collect": None
         }
-        economy.save_data()
+        economy._force_save()
         
         embed = discord.Embed(
             title="🔄 **RESET EKONOMI**",
@@ -947,15 +1033,14 @@ async def reset_economy(ctx, member: discord.Member):
     await ctx.send(embed=embed)
 
 # ========== TAMBAHKAN COMMAND-CCOMMAND LAIN YANG SUDAH ADA ==========
-# (Masukkan semua command yang sudah ada di sini: done, pricelist, payment, payimage, ping)
-# Command games lainnya tetap sama seperti sebelumnya...
-
 @bot.command(name='done')
+@commands.cooldown(1, 10, commands.BucketType.user)
 async def done_command(ctx):
     """Kirim link testimoni"""
     await ctx.send("**https://discord.com/channels/1452584833766129686/1452593189595648112\n\nmohon untuk share testi di sini ya mas, bebas record/ss**")
 
 @bot.command(name='pricelist')
+@commands.cooldown(1, 30, commands.BucketType.channel)
 async def pricelist_command(ctx):
     """Tampilkan pricelist dalam format teks yang dipisah"""
     pricelist_part1 = """
@@ -977,6 +1062,7 @@ https://discord.com/channels/1452584833766129686/1453053305184849960
     await ctx.send(pricelist_part1)
 
 @bot.command(name='payment')
+@commands.cooldown(1, 30, commands.BucketType.channel)
 async def show_payment(ctx, invoice_id: str = None):
     """Tampilkan gambar pembayaran QR Code"""
     embed = discord.Embed(
@@ -1033,6 +1119,7 @@ async def show_payment(ctx, invoice_id: str = None):
         await ctx.send(f"❌ Gagal menampilkan QR Code: {str(e)}")
 
 @bot.command(name='payimage')
+@commands.cooldown(1, 30, commands.BucketType.channel)
 async def send_payment_image(ctx):
     """Kirim gambar QR Code pembayaran langsung"""
     await ctx.send("**💳 GAMBAR PEMBAYARAN:**")
@@ -1040,31 +1127,79 @@ async def send_payment_image(ctx):
     await ctx.send("**📋 INSTRUKSI:** Transfer sesuai nominal, lalu kirim bukti ke admin!")
 
 @bot.command(name='ping')
+@commands.cooldown(1, 5, commands.BucketType.user)
 async def ping(ctx):
     """Cek koneksi bot"""
     latency = round(bot.latency * 1000)
     await ctx.send(f"🏓 Pong! {latency}ms")
 
-# ========== ERROR HANDLER ==========
+# ========== COOLDOWN ERROR HANDLER ==========
 @bot.event
 async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
+    if isinstance(error, commands.CommandOnCooldown):
+        # Format waktu cooldown
+        seconds = error.retry_after
+        if seconds > 3600:
+            time_str = f"{seconds // 3600} jam {seconds % 3600 // 60} menit"
+        elif seconds > 60:
+            time_str = f"{seconds // 60} menit {seconds % 60} detik"
+        else:
+            time_str = f"{seconds:.1f} detik"
+        
+        embed = discord.Embed(
+            title="⏰ **COOLDOWN**",
+            description=f"Command sedang dalam cooldown!\nTunggu **{time_str}** lagi.",
+            color=discord.Color.orange()
+        )
+        await ctx.send(embed=embed)
+    
+    elif isinstance(error, commands.CommandNotFound):
         await ctx.send(f"❌ Command tidak ditemukan! Ketik `{PREFIX}help` untuk bantuan.")
+    
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(f"❌ Argument kurang! Ketik `{PREFIX}help` untuk format yang benar.")
+    
     elif isinstance(error, commands.BadArgument):
         await ctx.send(f"❌ Argument tidak valid! Periksa format command.")
+    
     elif isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ Anda tidak memiliki izin untuk menggunakan command ini!")
+    
     else:
-        await ctx.send(f"❌ Error: {str(error)}")
+        # Log error tanpa mengirim ke user
+        print(f"Error pada command {ctx.command}: {str(error)}")
+        await ctx.send("❌ Terjadi error internal. Silakan coba lagi nanti.")
 
-# ========== JALANKAN BOT ==========
+# ========== SHUTDOWN HANDLER ==========
+@bot.event
+async def on_disconnect():
+    """Save data saat bot disconnect"""
+    print("⚠️ Bot disconnected, saving data...")
+    economy._force_save()
+
+@bot.event
+async def close():
+    """Save data saat bot shutdown"""
+    print("🛑 Bot shutting down, saving data...")
+    economy._force_save()
+    await super().close()
+
+# ========== RUNNING BOT ==========
 if __name__ == "__main__":
     print("🚀 Starting Discord Shop Bot with Economy System...")
-    print(f"💰 Economy features: Balance, Daily, Work, Crime, Transfer, Gacha")
-    print(f"🎮 Game features: Tebak Angka, Suit, Flip Coin, Dadu, Slot")
-    print(f"📝 Prefix: {PREFIX}")
-    print("⏳ Connecting to Discord...")
-    bot.run(TOKEN)
-
+    print(f"✅ Economy features: Balance, Daily, Work, Crime, Transfer, Gacha")
+    print(f"✅ Game features: Tebak Angka, Suit, Flip Coin, Dadu, Slot")
+    print(f"✅ Prefix: {PREFIX}")
+    print(f"✅ OPTIMIZATION: XP auto system REMOVED to prevent rate limits")
+    print(f"✅ OPTIMIZATION: Cooldowns added to all commands")
+    print(f"✅ OPTIMIZATION: Debounced file saving implemented")
+    print("🔗 Connecting to Discord...")
+    
+    try:
+        bot.run(TOKEN)
+    except KeyboardInterrupt:
+        print("\n🛑 Bot stopped by user")
+        economy._force_save()
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        economy._force_save()
