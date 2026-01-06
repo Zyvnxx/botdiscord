@@ -918,47 +918,6 @@ async def bot_help(ctx):
         inline=False
     )
     
-    embed.add_field(
-        name="𖥔˚ **GAMES**",
-        value=f"""
-        `{PREFIX}tebak` - Mulai tebak angka 1-100
-        `{PREFIX}tebakangka [angka]` - Tebak angka
-        `{PREFIX}suit [batu/gunting/kertas]` - Batu gunting kertas
-        `{PREFIX}suitstats` - Lihat statistik suit
-        `{PREFIX}flip [angka/gambar]` - Lempar koin
-        `{PREFIX}flipstats` - Statistik flip coin
-        `{PREFIX}dadu [jumlah]` - Lempar dadu (1-5)
-        `{PREFIX}slot` - Main mesin slot
-        `{PREFIX}games` - Lihat semua game
-        """,
-        inline=False
-    )
-    
-    embed.add_field(
-        name="𖥔˚ **SISTEM EKONOMI**",
-        value=f"""
-        `{PREFIX}balance` - Cek saldo & level
-        `{PREFIX}daily` - Klaim reward harian (24 jam)
-        `{PREFIX}work` - Bekerja (cooldown 1 jam)
-        `{PREFIX}crime` - Kejahatan (cooldown 2 jam)
-        `{PREFIX}transfer @user [amount]` - Transfer uang
-        `{PREFIX}rich` - Leaderboard orang terkaya
-        `{PREFIX}claimxp` - Klaim XP (cooldown 5 menit)
-        `{PREFIX}collect` - Kumpulkan reward (cooldown 10 menit)
-        """,
-        inline=False
-    )
-    
-    embed.add_field(
-        name="𖥔˚ **SISTEM GACHA**",
-        value=f"""
-        `{PREFIX}gacha [normal/premium]` - Buka gacha
-        `{PREFIX}gachainfo` - Info drop rates gacha
-        `{PREFIX}inventory` - Lihat inventory
-        `{PREFIX}sell [item] [quantity]` - Jual item
-        """,
-        inline=False
-    )
 
     embed.add_field(
         name="𖥔˚ **UTILITAS**",
@@ -1070,20 +1029,6 @@ async def show_payment(ctx, invoice_id: str = None):
         description="Pilih metode pembayaran di bawah:",
         color=discord.Color.green()
     )
-    
-    embed.add_field(
-        name="🏦 **TRANSFER BANK**",
-        value="""
-        **SEABANK**
-        ```
-        No. Rek: 901926260432
-        Atas Nama: Naufal Dhiyaul Haq
-        ```
-        """,
-        inline=False
-    )
-    
-    await ctx.send(embed=embed)
     
     try:
         await ctx.send("**🏦 QR CODE ALLPAY:**")
